@@ -1,0 +1,90 @@
+;; -*-lisp-*-
+;;
+;; Stumpwm user definitions
+
+(in-package :stumpwm)
+
+(defun cat (&rest strings) ; "Concatenates strings, like the Unix command 'cat'. A shortcut for (concatenate 'string foo bar)."
+  (apply 'concatenate 'string strings))
+
+(set-font "-*-terminus-medium-r-normal-*-12-*-*-*-*-*-iso10646-1")
+(set-prefix-key (kbd "C-t"))
+
+;(run-shell-command "xmodmap ~/.xmodmap")
+
+;;; Variables
+;; suppress the message StumpWM displays when it starts. Set it to NIL
+(setf *startup-message* "Never Stop Hacking!"
+      *mouse-focus-policy* :sloppy ;; :click, :ignore, :sloppy
+      ;;Set the message and input box to the bottom right. This way it overlaps with mode-line.
+      *message-window-gravity* :bottom-left
+      *input-window-gravity* :bottom-left
+      *frame-number-map* "123qwe"
+      *window-number-map* "123qwe")
+
+;;; Window Appearance
+(setf *normal-border-width* 0
+      *maxsize-border-width* 0
+      *transient-border-width* 1
+      *window-border-style* :thick) ; :thick :thin :tight :none
+
+
+;; define commands
+(defcommand firefox () ()
+  "Run or switch to firefox."
+  (run-or-raise "firefox" '(:class "Firefox")))
+
+(defcommand switchcaps () ()
+  "Switch Ctrl and Caps Lock"
+  (run-shell-command "xmodmap ~/.xmodmap"))
+
+
+(defmacro program-with-layout (name &key (command (string-downcase (string name)))
+                               (props `'(:class ,(string-capitalize command))))
+  `(defcommand ,name () ()
+     (gnew ,command)
+     (restore-from-file ,(concat "/home/dima/.stumpwm_files/"
+                                 command "-layout"))
+     (restore-window-placement-rules ,(concat "/home/dima/.stumpwm_files/"
+                                              command "-rules"))
+     (run-or-raise ,command ,props)
+     (place-existing-windows))) ; needed if the command has already been run
+
+(program-with-layout gimp)
+
+(defcommand reinit () ()
+  "Reload stumpwm config file"
+            (run-commands "reload" "loadrc"))
+
+;; This command runs the stumpwm "quit" command, but only if there aren't any windows open.
+(defcommand safequit () ()
+            "Checks if any windows are open before quitting."
+            (let ((win-count 0))
+              ;; Count the windows in each group
+              (dolist (group (screen-groups (current-screen)))
+                (setq win-count (+ (length (group-windows group)) win-count)))
+              ;; Display the number of open windows or quit
+              (if (= win-count 0)
+                  (run-commands "quit")
+                  (message (format nil "You have ~d ~a open" win-count
+                                   (if (= win-count 1) "window" "windows"))))))
+
+(defun change-vol (sign val) () "Change mixer volume by value val"
+  (run-shell-command (format nil "mixer vol ~A~A" sign val)))
+
+(defcommand vol+1 () () (change-vol "+" 1))
+(defcommand vol-1 () () (change-vol "-" 1))
+
+(defcommand vol+3 () () (change-vol "+" 3))
+(defcommand vol-3 () () (change-vol "-" 3))
+
+(define-key *root-map* (kbd "f") "firefox")
+(define-key *root-map* (kbd "C-f") "firefox")
+(define-key *root-map* (kbd "C-x") "switchcaps")
+(define-key *root-map* (kbd "G") "gimp")
+(define-key *root-map* (kbd "R") "reinit")
+(define-key *root-map* (kbd "Q") "safequit")
+(define-key *root-map* (kbd "=") "vol+1")
+(define-key *root-map* (kbd "-") "vol-1")
+(define-key *root-map* (kbd "+") "vol+3")
+(define-key *root-map* (kbd "_") "vol-3")

@@ -1,0 +1,8 @@
+XTerm*rightScrollBar: True
+XTerm*scrollBar: True
+XTerm*saveLines: 1000
+XTerm*foreground: grey
+XTerm*cursorColor: grey
+XTerm*background: black
+XTerm*faceName: terminus
+XTerm*faceSize: 12

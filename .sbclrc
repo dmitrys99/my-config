@@ -1,0 +1,14 @@
+; solo
+
+(setf sb-impl::*default-external-format* :utf-8)
+;;; The following lines added by ql:add-to-init-file:
+#-quicklisp
+(let ((quicklisp-init #P"/usr/home/dima/quicklisp/setup.lisp"))
+  (when (probe-file quicklisp-init)
+    (load quicklisp-init)))
+
+(push "~/bates/"    asdf:*central-registry*)
+(push "~/Kugel/"    asdf:*central-registry*)
+(push "~/cl-eshop/" asdf:*central-registry*)
+(push "~/tetka/"    asdf:*central-registry*)
+(push "~/dimina/"    asdf:*central-registry*)
