@@ -36,3 +36,9 @@
 (require 'restas)
 
 (autoload 'mpg123 "mpg123" "A front-end to mpg123" t)
+
+; Выбор цветовой схемы
+(require 'color-theme)
+(color-theme-twilight)
+
+
