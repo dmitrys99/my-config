@@ -1,0 +1,217 @@
+#!/bin/sh
+#
+# Auto mount daemon for FreeBSD's devd(8)
+# v0.5
+
+AMOUNT_DIR='/etc/amount'
+
+TMPDIR=/tmp/.amountd
+DEVMATCH="^da"
+LABELMATCH="^(msdosfs/|ufs/|ntfs/)"
+UPDATEDESKTOP="${AMOUNT_DIR}/updatedesktop.pl"
+
+cleanup () {
+	trap - EXIT
+	kill ${DEVDCAT}
+	rm -rf ${TMPDIR}
+	exit 0
+}
+
+log () {
+	local level
+	level=${1}
+	shift
+	logger -p user.${level} -t amountd $*
+}
+
+pollDev () {
+	local status
+	status=0
+	while true; do
+		log info polling ${1}
+		sleep 5
+		if camcontrol tur ${1} >/dev/null 2>/dev/null; then
+			[ ${status} -eq 0 ] || continue
+			status=1
+			echo "!system=DEVFS subsystem=CDEV type=CREATE cdev=${1}" >${TMPDIR}/${DEVDFIFO}
+			sleep 1
+			:>/dev/${1}
+		else
+			if ! camcontrol devlist |grep -q "[(,]${1}[,)]"; then
+				log info lost device ${1}
+				echo "!system=DEVFS subsystem=CDEV type=ENDPOLL cdev=${1}" >${TMPDIR}/${DEVDFIFO}
+				return 0
+			fi
+			[ ${status} -eq 1 ] || continue
+			status=0
+			echo "!system=DEVFS subsystem=CDEV type=DESTROY cdev=${1}" >${TMPDIR}/${DEVDFIFO}
+		fi
+	done
+}
+
+probeDev () {
+	local dev probe gtype status pollpid
+	dev=$1
+	eval "status=\$STATUS_${dev}"
+	eval "pollpid=\$POLLPID_${dev}"
+	if [ "${status}" = "probed" ]; then return 0; fi
+	if [ -z "${pollpid}" ]; then
+		if camcontrol devlist |grep -q "[(,]${dev}[,)]"; then
+			if ! camcontrol tur ${dev} >/dev/null; then
+				pollDev ${dev} &
+				eval "POLLPID_${dev}=$!"
+				log info forking poller at PID $!
+				return 1
+			fi
+		fi
+	fi
+	probe=$(gpart show -rp ${dev} 2>/dev/null)
+	if [ $? -ne 0 ]; then
+		probe=$(dd if=/dev/${dev} bs=128k count=1 2>/dev/null |file -Ls /dev/stdin)
+		case "${probe}" in
+		*FAT*)
+			eval "STATUS_${dev}=probed"
+			eval "TYPE_${dev}=msdosfs"
+			MOUNTABLE="${MOUNTABLE} ${dev}"
+			return 0
+			;;
+		*Linux*ext2*)
+			eval "STATUS_${3}=probed"
+			eval "TYPE_${3}=ext2fs"
+			MOUNTABLE="${MOUNTABLE} ${3}"
+			return 0
+		esac
+		return 1
+	fi
+	IFS="
+"
+	for line in ${probe}; do
+		IFS=" 	"
+		set -- ${line}
+		[ "${3}" != "-" ] || continue
+		if [ "${1}" = "=>" ]; then
+			shift
+			eval "STATUS_${dev}=probed"
+			gtype=${4}
+			continue
+		fi
+		#echo "${4}" > /tmp/x
+		case "${gtype}" in
+		MBR)
+			
+			case "${4}" in
+			1|4|5|6|12|13|15|16)
+				eval "STATUS_${3}=probed"
+				eval "TYPE_${3}=msdosfs"
+				MOUNTABLE="${MOUNTABLE} ${3}"
+				;;
+			83)
+				if dd if=/dev/${3} bs=128k count=1 2>/dev/null \
+					|file -Ls /dev/stdin |grep -q "Linux.*ext2"; then
+					eval "STATUS_${3}=probed"
+					eval "TYPE_${3}=ext2fs"
+					MOUNTABLE="${MOUNTABLE} ${3}"
+				fi
+				;;
+			165)
+				probeDev ${3}
+				if [ $? -eq 1 ]; then
+					eval "STATUS_${3}=probed"
+					eval "TYPE_${3}=ufs"
+					MOUNTABLE="${MOUNTABLE} ${3}"
+				fi
+				;;
+			esac
+			;;
+		BSD)
+			case "${4}" in
+			7)
+				eval "STATUS_${3}=probed"
+				eval "TYPE_${3}=ufs"
+				MOUNTABLE="${MOUNTABLE} ${3}"
+				;;
+			esac
+			;;
+		esac
+	done
+	unset IFS
+	return 0
+}
+
+probeLabel () {
+	local label dev curtype glabel
+	label=${1}
+	glabel=$(glabel status |grep ${label})
+	[ $? -eq 0 ] || return 1
+	set -- ${glabel}
+	eval "curtype=\$TYPE_${3}"
+	if [ "${curtype}" != "${label%/*}" ]; then
+		eval "STATUS_${3}=probed"
+		eval "TYPE_${3}=${label%/*}"
+		MOUNTABLE="${MOUNTABLE} ${3}"
+	fi
+	eval "LABEL_${3}=${label#*/}"
+	return 0
+}
+
+DEVDFIFO=devd.fifo
+MNTFILE=mountable
+trap cleanup 1 2 13 14 15 EXIT
+[ -d ${TMPDIR} ] && rm -rf ${TMPDIR}
+mkdir ${TMPDIR} || exit 1
+mkfifo ${TMPDIR}/${DEVDFIFO} || exit 1
+if [ -S /var/run/devd.pipe ]; then
+	cat /var/run/devd.pipe >${TMPDIR}/${DEVDFIFO} &
+	DEVDCAT=$!
+else
+	log err devd domain socket non-existant
+	echo devd domain socket non-existant 1>&2
+	exit 1
+fi
+
+MOUNTABLE=""
+:>${TMPDIR}/mountable
+
+while read SYSTEM SUBSYS TYPE EXTRA <&3; do
+	[ "${SYSTEM#*=}" = "DEVFS" -a "${SUBSYS#*=}" = "CDEV" ] || continue
+	CDEV=${EXTRA#cdev=}
+	if echo ${CDEV} |grep -qE ${DEVMATCH}; then
+		PROBEFUNC=probeDev
+	elif echo ${CDEV} |grep -qE ${LABELMATCH}; then
+		PROBEFUNC=probeLabel
+	else
+		continue
+	fi
+	log notice ${TYPE#*=} ${CDEV}
+	if [ "${TYPE#*=}" = "CREATE" ]; then
+		${PROBEFUNC} ${CDEV}
+	elif [ "${TYPE#*=}" = "DESTROY" ]; then
+		if [ "${PROBEFUNC}" = "probeDev" ]; then
+			eval "TYPE=\$TYPE_${CDEV}"
+			if [ -n "${TYPE}" ]; then
+				oldmountable=${MOUNTABLE}
+				MOUNTABLE=""
+				for mountable in ${oldmountable}; do
+					[ "${mountable}" != "${CDEV}" ] || continue
+					MOUNTABLE="${MOUNTABLE} ${mountable}"
+				done
+				eval "unset TYPE_${CDEV} LABEL_${CDEV}"
+			fi
+			eval "unset STATUS_${CDEV}"
+		fi
+	elif [ "${TYPE#*=}" = "ENDPOLL" ]; then
+		eval "unset POLLPID_${CDEV}"
+	fi
+	:>${TMPDIR}/mountable
+	
+	#Paint icons in Desktop (delete them)
+	#$UPDATEDESKTOP
+		
+	for mountable in ${MOUNTABLE}; do
+		eval "LABEL=\$LABEL_${mountable}"
+		eval "TYPE=\$TYPE_${mountable}"
+		echo ${mountable} ${TYPE} ${LABEL} >>${TMPDIR}/mountable
+	done
+	#Paint icons in Desktop (if any)
+	$UPDATEDESKTOP
+done 3<${TMPDIR}/${DEVDFIFO}

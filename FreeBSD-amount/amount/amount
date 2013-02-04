@@ -1,0 +1,111 @@
+#!/bin/sh
+#
+# Command line tool for amountd
+# v0.5
+
+PREFIX=/media
+#PREFIX=/mnt
+MOUNTABLE=/tmp/.amountd/mountable
+
+doCmd () {
+	local mcmd
+	case "${1}" in
+	mount)
+		case "${2}" in
+		msdosfs)
+			mcmd="mount_msdosfs"
+			if [ -n "${5}" ]; then
+				mcmd="${mcmd} -u ${5} -D cp866 -L ru_RU.UTF-8"
+			fi
+			;;
+		ntfs)
+			mcmd="mount_ntfs"
+			if [ -n "${5}" ]; then
+				mcmd="${mcmd} -u ${5}"
+			fi
+			;;
+		ufs)
+			mcmd="mount -t ufs"
+			;;
+		*)
+			return 1
+			;;
+		esac
+		#echo "mkdir -p ${4}"
+		#echo "${mcmd} ${3} ${4}"
+		mkdir -p ${4} #&& ${mcmd} ${3} ${4}
+		#echo p3
+		${mcmd} ${3} ${4}
+		echo "MEDIA:${4}"
+		#echo p0
+		;;
+	umount)	
+		umount ${3} && rmdir ${4}
+		;;
+	esac
+	return $?
+}
+
+if [ "${1}" = "doCmd" ]; then
+	shift
+	doCmd "$@"
+	exit $?
+fi
+
+if [ -n "${1}" ]; then
+	cdev=${1}
+	if [ ! -r ${MOUNTABLE} ]; then
+		echo amountd mountable unreadable 1>&2
+		exit 1
+	fi
+else
+	if [ ! -r ${MOUNTABLE} ]; then
+		echo amountd mountable unreadable 1>&2
+		exit 1
+	fi
+fi
+
+while read dev fs label <&3; do
+	if [ -z "${label}" ]; then
+		provider=/dev/${dev}
+		mpoint=${PREFIX}/${dev}
+		olabel="${dev} ${fs}"
+	else
+		provider="/dev/${fs}/${label}"
+		mpoint=${PREFIX}/${label}
+		olabel="${dev} ${fs}/${label}"
+	fi
+	
+	echo "${dev} ${fs} ${label}"
+	echo "cdev=${cdev} dev=${dev}"
+	
+	if [ "${fs}" = "ntfs" ]; then
+		mstat=$(mount |grep -E "^/dev/(fuse.|${fs}/${label}) on")	
+	else
+		mstat=$(mount |grep -E "^/dev/(${dev}|${fs}/${label}) on")
+	fi
+		
+	if [ $? -eq 0 ]; then
+		op=umount
+		set -- ${mstat}
+		provider="${1}"
+		mpoint="${3}"		
+	else
+		op=mount
+	fi
+	if [ -n "${cdev}" ]; then
+		if [ "${cdev}" = "${dev}" ]; then
+			echo -n "${op}ing ${olabel}... "
+			sudo ${0} doCmd ${op} ${fs} ${provider} ${mpoint} ${USER}
+			echo p1
+			if [ $? -eq 0 ]; then
+				echo success
+			else
+				echo failed
+			fi
+			exit 0
+		fi
+		continue
+	fi
+	echo ${op} ${olabel}
+done 3<${MOUNTABLE}
